@@ -11,7 +11,7 @@ doc_to_visual: !function utils.vsibench_doc_to_visual
 doc_to_text: !function utils.vsibench_doc_to_text
 doc_to_target: "ground_truth"
 generation_kwargs:
-  max_new_tokens: 16
+  max_new_tokens: 4096
   temperature: 0
   top_p: 1.0
   num_beams: 1
@@ -25,7 +25,7 @@ metric_list:
     higher_is_better: true
 lmms_eval_specific_kwargs:
   default:
-    pre_prompt: ""
+    pre_prompt: "According to the original video and the predicted objects' center locations, answer the following question:"
     mca_post_prompt: "Answer with the option's letter from the given choices directly."
     na_post_prompt: "Please answer the question using a single word or phrase."
   gemini_api:
