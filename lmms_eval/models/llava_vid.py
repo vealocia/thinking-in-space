@@ -48,68 +48,16 @@ from llava.model.language_model.llava_llama import LlavaConfig
 
 AutoConfig.register("llava_llama", LlavaConfig)
 
-import re
 import json
 
-OBJ_REL_DISTANCE_TEMPLATE = """
-Measuring from the closest point of each object, which of these objects ({choice_a}, {choice_b}, {choice_c}, {choice_d}) is the closest to the {category}?
-""".strip()
-OBJ_REL_DIRECTION_HARD_TEMPLATE = """
-If I am standing by the {positioning_object} and facing the {orienting_object}, is the {querying_object} to my front-left, front-right, back-left, or back-right?
-The directions refer to the quadrants of a Cartesian plane (if I am standing at the origin and facing along the positive y-axis).
-""".strip()
-OBJ_REL_DIRECTION_MEDIUM_TEMPLATE = """
-If I am standing by the {positioning_object} and facing the {orienting_object}, is the {querying_object} to my left, right, or back?
-An object is to my back if I would have to turn at least 135 degrees in order to face it.
-""".strip()
-OBJ_REL_DIRECTION_EASY_TEMPLATE = """
-If I am standing by the {positioning_object} and facing the {orienting_object}, is the {querying_object} to the left or the right of the {orienting_object}?
-""".strip()
-def extract_categories_of_interest(doc):
-    if doc['question_type'].startswith('object_rel_direction'):
-        if doc['question_type'] == "object_rel_direction_hard":
-            template = OBJ_REL_DIRECTION_HARD_TEMPLATE
-        elif doc['question_type'] == "object_rel_direction_medium":
-            template = OBJ_REL_DIRECTION_MEDIUM_TEMPLATE
-        elif doc['question_type'] == "object_rel_direction_easy":
-            template = OBJ_REL_DIRECTION_EASY_TEMPLATE
-        pattern = re.escape(template)
-        pattern = pattern.replace(r'\{positioning_object\}', r'(?P<positioning_object>.+?)')
-        pattern = pattern.replace(r'\{orienting_object\}', r'(?P<orienting_object>.+?)')
-        pattern = pattern.replace(r'\{querying_object\}', r'(?P<querying_object>.+?)')
-        
-        if doc['question_type'] == "object_rel_direction_easy":
-            pattern = re.compile(
-                r"^If I am standing by the "
-                r"(?P<positioning_object>.*?)"
-                r" and facing the "
-                r"(?P<orienting_object>.*?)"
-                r", is the "
-                r"(?P<querying_object>.*?)"
-                r" to the left or the right of the "
-                r"(?P=orienting_object)\?$"
-            )
-    elif doc['question_type'].startswith('object_rel_distance'):
-        pattern = re.escape(OBJ_REL_DISTANCE_TEMPLATE)
-        pattern = pattern.replace(r'\{choice_a\}', r'(?P<choice_a>.+?)')
-        pattern = pattern.replace(r'\{choice_b\}', r'(?P<choice_b>.+?)')
-        pattern = pattern.replace(r'\{choice_c\}', r'(?P<choice_c>.+?)')
-        pattern = pattern.replace(r'\{choice_d\}', r'(?P<choice_d>.+?)')
-        pattern = pattern.replace(r'\{category\}', r'(?P<category>.+?)')
-    
-    match = re.match(pattern, doc['question'])
-    if match:
-        return match.groupdict()
-    else:
-        return None
+objects_of_interest = json.load(open("/home/shusheng/workspace/24092201_spbench_eval_toolkit/logs/20241031/alldataset_coordinate_generation/spbench_layout_generation/1101_0339_gemini_1p5_pro_002_gemini_api_model_args_8a60ae/objects_of_interest.json"))
 
 COGMAP_PROMPT_TEMPLATE = """[Task]
 This video captures an indoor scene. Your objective is to identify specific objects within the video, understand the spatial arrangement of the scene, and estimate the center point of each object, assuming the entire scene is represented by a 10x10 grid.
 [Rule]
-1. We provide the categories to care about in this scene: {categories_of_interest}. Focus ONLY on these categories.
-2. Estimate the center location of each instance within the provided categories, assuming the entire scene is represented by a 10x10 grid.
-3. If a category contains multiple instances, include all of them.
-4. Each object's estimated location should accurately reflect its real position in the scene, preserving the relative spatial relationships among all objects.
+1. We provide the instances (including the category name and numbers of object) to care about in this scene: {categories_of_interest} Focus ONLY on these instances.
+2. Estimate the center location of each instance within the provided instances, assuming the entire scene is represented by a 10x10 grid.
+3. Each object's estimated location should accurately reflect its real position in the scene, preserving the relative spatial relationships among all objects.
 [Output]
 Present the estimated center locations for each object as a list within a dictionary.
 STRICTLY follow this JSON format:
@@ -444,11 +392,8 @@ class LlavaVid(lmms):
                     pbar.update(1)
                     continue
 
-                # qs = contexts
-                categories_of_interest = extract_categories_of_interest(self.task_dict[task][split][doc_id])
-                assert categories_of_interest is not None, self.task_dict[task][split][doc_id]
-                categories_of_interest = list(categories_of_interest.values())
-                qs = COGMAP_PROMPT_TEMPLATE.format(categories_of_interest=categories_of_interest)
+                objects_of_interest_this_scene = objects_of_interest[f"{self.task_dict[task][split][doc_id]['dataset']}_{self.task_dict[task][split][doc_id]['scene_name']}"]
+                qs = COGMAP_PROMPT_TEMPLATE.format(categories_of_interest=objects_of_interest_this_scene)
                 if self.model.config.mm_use_im_start_end:
                     qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + "\n" + qs
                 else:
@@ -456,8 +401,6 @@ class LlavaVid(lmms):
             else:
                 videos = None
                 qs = contexts
-
-            final_outputs = [qs]
 
             # This is much safer for llama3, as we now have some object type in it
             if "llama_3" in self.conv_template:
@@ -507,66 +450,7 @@ class LlavaVid(lmms):
                 # output_ids = model.generate(inputs=input_ids, images=video, attention_mask=attention_masks, modalities="video", do_sample=True, temperature=0.2, use_cache=True, stopping_criteria=[stopping_criteria])
 
             outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
-            final_outputs.append(outputs)
-            # inputs = self.tokenizer.batch_decode(input_ids % self.tokenizer.vocab_size, skip_special_tokens=True)[0].strip()
-            # print(inputs, outputs)
-            final_outputs.append(contexts)
             
-            # This is much safer for llama3, as we now have some object type in it
-            if "llama_3" in self.conv_template:
-                conv = copy.deepcopy(conv_templates[self.conv_template])
-            else:
-                conv = conv_templates[self.conv_template].copy()
-
-            conv.append_message(conv.roles[0], qs)
-            conv.append_message(conv.roles[1], outputs)
-            conv.append_message(conv.roles[0], contexts)
-            conv.append_message(conv.roles[1], None)
-            prompt = conv.get_prompt()
-
-            input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).cuda()
-            pad_token_ids = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
-            if "llama_3" in self.conv_template:
-                pad_token_ids = 0  # lmms-lab/llama3-llava-8b is trained on this pad token id. You may need to customize this for other models.
-            attention_masks = input_ids.ne(pad_token_ids).long().cuda()
-
-            stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
-            keywords = [stop_str]
-            stopping_criteria = KeywordsStoppingCriteria(keywords, self.tokenizer, input_ids)
-
-            cur_prompt = contexts
-            
-            if "max_new_tokens" not in gen_kwargs:
-                gen_kwargs["max_new_tokens"] = 1024
-            if "temperature" not in gen_kwargs:
-                gen_kwargs["temperature"] = 0
-            if "top_p" not in gen_kwargs:
-                gen_kwargs["top_p"] = None
-            if "num_beams" not in gen_kwargs:
-                gen_kwargs["num_beams"] = 1
-
-            with torch.inference_mode():
-                # second round: answer the question
-                output_ids = self.model.generate(
-                    inputs=input_ids,
-                    images=videos,
-                    attention_mask=attention_masks,
-                    modalities=["video" for _ in videos] if videos is not None else None,
-                    use_cache=self.use_cache,
-                    stopping_criteria=[stopping_criteria],
-                    do_sample=True if gen_kwargs["temperature"] > 0 else False,
-                    temperature=gen_kwargs["temperature"],
-                    top_p=gen_kwargs["top_p"],
-                    num_beams=gen_kwargs["num_beams"],
-                    max_new_tokens=gen_kwargs["max_new_tokens"],
-                )
-                # output_ids = model.generate(inputs=input_ids, images=video, attention_mask=attention_masks, modalities="video", do_sample=True, temperature=0.2, use_cache=True, stopping_criteria=[stopping_criteria])
-
-            outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
-            final_outputs.append(outputs)
-            # inputs = self.tokenizer.batch_decode(input_ids % self.tokenizer.vocab_size, skip_special_tokens=True)[0].strip()
-            # print(inputs, outputs)
-            
-            res.append(json.dumps(final_outputs))
+            res.append(json.dumps([qs, outputs]))
             pbar.update(1)
         return res
